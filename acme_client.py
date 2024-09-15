@@ -1,52 +1,103 @@
 import argparse
+import http.client
 import logging
-
-from json import loads, dumps
+from base64 import b64encode
+from json import dumps, loads
 from typing import Optional
 
-
-import http.client
-
-from requests import Session, Response
+from key_utils import create_key
+from requests import Response, Session
 
 http.client.HTTPConnection.debuglevel = 0  # 0 for off, > 0 for on
 
 log_level: int = logging.ERROR
 logging.basicConfig()
-requests_log = logging.getLogger("requests.packages.urllib3")
-requests_log.setLevel(log_level)
-requests_log.propagate = True
+logger = logging.getLogger("requests.packages.urllib3")
+logger.setLevel(log_level)
+logger.propagate = True
+
+
+def get_directory(session: Session, url: str) -> dict:
+    resp_dir: Response = session.get(
+        url=f'{url}/directory',
+    )
+    return resp_dir.json()
+
+
+def get_nonce(session: Session, url: str) -> str:
+    resp_nonce: Response = session.get(url=url)
+    nonce: str = resp_nonce.headers.get('Replay-Nonce')
+    return nonce
+
+
+def create_account(
+        session: Session,
+        url: str,
+        nonce: str,
+) -> dict:
+    payload: dict = {
+        "termsOfServiceAgreed": True,
+        "contact": [
+            "mailto:cert-admin@ownjoo.org",
+            "mailto:admin@ownjoo.org"
+        ]
+    }
+
+    priv, pub = create_key()
+
+    protected: dict = {
+        "alg": priv.to_dict().get('alg'),
+        "jwk": priv.to_dict(),
+        "nonce": nonce,
+        "url": url,
+    }
+
+    signed_protected = priv.sign(dumps(protected).encode('utf-8'))
+
+    headers: dict = {
+        "Accept": "application/json",
+        "Content-Type": "application/jose+json",
+    }
+    data: dict = {
+        'protected': b64encode(dumps(protected).encode('utf-8')).decode('utf-8'),
+        'payload': b64encode(dumps(payload).encode('utf-8')).decode('utf-8'),
+        'signature': b64encode(signed_protected).decode('utf-8'),
+    }
+
+    resp_acct: Response = session.post(url=url, headers=headers, json=data)
+    acct: dict = resp_acct.json()
+
+    return acct
 
 
 def main(
-        client_id: str,
-        client_secret: str,
+        url: str,
+        # key: str,
+        # key_id: str,
         proxies: Optional[dict] = None,
 ) -> dict | str:
     session = Session()
     session.proxies = proxies
     session.headers = {'Accept': 'application/json'}
 
-    token_resp: Response = session.post(
-        url=f'https://login.intigriti.com/connect/token',
+    directory: dict = get_directory(session=session, url=url)
+    nonce: str = get_nonce(session=session, url=directory.get('newNonce'))
+    acct: dict = create_account(
+        session=session,
+        url=directory.get('newAccount'),
+        nonce=nonce,
     )
 
-    return token_resp
+    return acct
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--client_id',
+        '--url',
         type=str,
         required=True,
-        help="The client_id for your Let's Encrypt account",
-    )
-    parser.add_argument(
-        '--client_secret',
-        type=str,
-        required=True,
-        help="The client_secret for your Let's Encrypt account",
+        help="The URL for your ACME server",
     )
     parser.add_argument(
         '--proxies',
@@ -68,13 +119,12 @@ if __name__ == '__main__':
 
     if args.debug:
         http.client.HTTPConnection.debuglevel = args.debug
-        requests_log.setLevel(args.debug)
+        logger.setLevel(args.debug)
 
     if data := main(
-        client_id=args.client_id,
-        client_secret=args.client_secret,
+        url=args.url,
         proxies=proxies,
     ):
-        print(f'\n\n{data}\n\n')
+        print(data)
     else:
         print('whoops...')
