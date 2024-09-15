@@ -37,6 +37,13 @@ def create_account(
 ) -> dict:
     priv, pub = create_key()
 
+    protected: dict = {
+        "alg": priv.to_dict().get('alg'),
+        "jwk": priv.to_dict(),
+        "nonce": nonce,
+        "url": url,
+    }
+
     payload: dict = {
         "termsOfServiceAgreed": True,
         "contact": [
@@ -45,18 +52,12 @@ def create_account(
         ]
     }
 
-    protected: dict = {
-        "alg": priv.to_dict().get('alg'),
-        "jwk": priv.to_dict(),
-        "nonce": nonce,
-        "url": url,
-    }
-
     signed_protected = priv.sign(dumps(protected).encode('utf-8'))
 
     headers: dict = {
-        "Accept": "application/json",
-        "Content-Type": "application/jose+json",
+        'Accept': 'application/json',
+        'Content-Type': 'application/jose+json',
+        'url': url,
     }
 
     data: dict = {
