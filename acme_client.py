@@ -35,6 +35,8 @@ def create_account(
         url: str,
         nonce: str,
 ) -> dict:
+    priv, pub = create_key()
+
     payload: dict = {
         "termsOfServiceAgreed": True,
         "contact": [
@@ -42,8 +44,6 @@ def create_account(
             "mailto:admin@ownjoo.org"
         ]
     }
-
-    priv, pub = create_key()
 
     protected: dict = {
         "alg": priv.to_dict().get('alg'),
@@ -58,6 +58,7 @@ def create_account(
         "Accept": "application/json",
         "Content-Type": "application/jose+json",
     }
+
     data: dict = {
         'protected': b64encode(dumps(protected).encode('utf-8')).decode('utf-8'),
         'payload': b64encode(dumps(payload).encode('utf-8')).decode('utf-8'),
