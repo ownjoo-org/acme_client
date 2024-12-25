@@ -1,11 +1,13 @@
 import argparse
 import http.client
 import logging
-from base64 import b64encode
 from json import dumps, loads
+from sys import stderr
 from typing import Optional
 
-from key_utils import create_key
+from jose.jws import sign
+from josepy import b64encode
+
 from requests import Response, Session
 
 http.client.HTTPConnection.debuglevel = 0  # 0 for off, > 0 for on
@@ -30,52 +32,34 @@ def get_nonce(session: Session, url: str) -> str:
     return nonce
 
 
-def create_account(
+def do_signed_request(
         session: Session,
-        url: str,
-        nonce: str,
+        key: str,
+        protected: dict,
+        payload: dict,
+        **kwargs,
 ) -> dict:
-    priv, pub = create_key()
-
-    protected: dict = {
-        "alg": priv.to_dict().get('alg'),
-        "jwk": priv.to_dict(),
-        "nonce": nonce,
-        "url": url,
-    }
-
-    payload: dict = {
-        "termsOfServiceAgreed": True,
-        "contact": [
-            "mailto:cert-admin@ownjoo.org",
-            "mailto:admin@ownjoo.org"
-        ]
-    }
-
-    signed_protected = priv.sign(dumps(protected).encode('utf-8'))
-
-    headers: dict = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/jose+json',
-        'url': url,
-    }
-
-    data: dict = {
-        'protected': b64encode(dumps(protected).encode('utf-8')).decode('utf-8'),
-        'payload': b64encode(dumps(payload).encode('utf-8')).decode('utf-8'),
-        'signature': b64encode(signed_protected).decode('utf-8'),
-    }
-
-    resp_acct: Response = session.post(url=url, headers=headers, json=data)
-    acct: dict = resp_acct.json()
-
-    return acct
+    try:
+        json: Optional[dict] = {
+            'protected': b64encode(str(protected).encode(encoding='utf-8')).decode(encoding='utf-8'),
+            'payload': b64encode(str(payload).encode(encoding='utf-8')).decode(encoding='utf-8'),
+            'signature': b64encode(sign(payload=payload, key=key).encode(encoding='utf-8')).decode(encoding='utf-8'),
+        }
+        resp_acct: Response = session.request(**kwargs, json=json)
+    except Exception as e:
+        print(f'ERROR GETTING RESPONSE: {e}', file=stderr)
+        raise
+    try:
+        acct: dict = resp_acct.json()
+        return acct
+    except Exception as e:
+        print(f'ERROR PARSING RESPONSE: {e}', file=stderr)
+        raise
 
 
 def main(
         url: str,
-        # key: str,
-        # key_id: str,
+        key_file: str,
         proxies: Optional[dict] = None,
 ) -> dict | str:
     session = Session()
@@ -83,14 +67,25 @@ def main(
     session.headers = {'Accept': 'application/json'}
 
     directory: dict = get_directory(session=session, url=url)
-    nonce: str = get_nonce(session=session, url=directory.get('newNonce'))
-    acct: dict = create_account(
-        session=session,
-        url=directory.get('newAccount'),
-        nonce=nonce,
-    )
 
-    return acct
+    protected: dict = {
+        'alg': 'HS256',
+        'kid': '0391180c5936fdcfa3a59923a6982d75a321',
+        'nonce': get_nonce(session, directory.get('newNonce')),
+        'url': 'https://mywebserver.ownjoo.org/',
+    }
+    payload: dict = {'onlyReturnExisting': True}
+    with open(key_file, 'r') as file:
+        key = file.read()
+        return do_signed_request(
+            session=session,
+            key=key,
+            protected=protected,
+            payload=payload,
+            method='post',
+            headers={'Content-Type': 'application/jose+json'},
+            url=directory.get('newAccount'),
+        )
 
 
 if __name__ == '__main__':
@@ -100,6 +95,12 @@ if __name__ == '__main__':
         type=str,
         required=True,
         help="The URL for your ACME server",
+    )
+    parser.add_argument(
+        '--key_file',
+        type=str,
+        required=True,
+        help="Path to private key file",
     )
     parser.add_argument(
         '--proxies',
@@ -125,6 +126,7 @@ if __name__ == '__main__':
 
     if data := main(
         url=args.url,
+        key_file=args.key_file,
         proxies=proxies,
     ):
         print(data)
